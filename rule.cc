@@ -54,10 +54,11 @@ Rule::Rule()
 }
 
 void ParseRule(Loc& loc, StringPiece line, char term,
+               const function<string()> &after_term_fn,
                Rule** out_rule, RuleVarAssignment* rule_var) {
   size_t index = line.find(':');
   if (index == string::npos) {
-    ERROR("%s:%d: *** missing separator.", LOCF(loc));
+    ERROR_LOC(loc, "*** missing separator.");
   }
 
   StringPiece first = line.substr(0, index);
@@ -70,8 +71,7 @@ void ParseRule(Loc& loc, StringPiece line, char term,
       !outputs.empty() && IsPatternRule(outputs[0].str()));
   for (size_t i = 1; i < outputs.size(); i++) {
     if (IsPatternRule(outputs[i].str()) != is_first_pattern) {
-      ERROR("%s:%d: *** mixed implicit and normal rules: deprecated syntax",
-            LOCF(loc));
+      ERROR_LOC(loc, "*** mixed implicit and normal rules: deprecated syntax");
     }
   }
 
@@ -84,15 +84,31 @@ void ParseRule(Loc& loc, StringPiece line, char term,
 
   StringPiece rest = line.substr(index);
   size_t term_index = rest.find_first_of("=;");
+  string buf;
   if ((term_index != string::npos && rest[term_index] == '=') ||
       (term_index == string::npos && term == '=')) {
     if (term_index == string::npos)
       term_index = rest.size();
-    rule_var->outputs.swap(outputs);
-    ParseAssignStatement(rest, term_index,
-                         &rule_var->lhs, &rule_var->rhs, &rule_var->op);
-    *out_rule = NULL;
-    return;
+    // "test: =foo" is questionable but a valid rule definition (not a
+    // target specific variable).
+    // See https://github.com/google/kati/issues/83
+    if (term_index == 0) {
+      KATI_WARN_LOC(loc, "defining a target which starts with `=', "
+                    "which is not probably what you meant");
+      buf = line.as_string();
+      if (term)
+        buf += term;
+      buf += after_term_fn();
+      line = buf;
+      rest = line.substr(index);
+      term_index = string::npos;
+    } else {
+      rule_var->outputs.swap(outputs);
+      ParseAssignStatement(rest, term_index,
+                           &rule_var->lhs, &rule_var->rhs, &rule_var->op);
+      *out_rule = NULL;
+      return;
+    }
   }
 
   Rule* rule = new Rule();
@@ -119,8 +135,7 @@ void ParseRule(Loc& loc, StringPiece line, char term,
   }
 
   if (is_first_pattern) {
-    ERROR("%s:%d: *** mixed implicit and normal rules: deprecated syntax",
-          LOCF(loc));
+    ERROR_LOC(loc, "*** mixed implicit and normal rules: deprecated syntax");
   }
 
   StringPiece second = rest.substr(0, index);
@@ -130,8 +145,8 @@ void ParseRule(Loc& loc, StringPiece line, char term,
     tok = TrimLeadingCurdir(tok);
     for (Symbol output : rule->outputs) {
       if (!Pattern(tok).Match(output.str())) {
-        WARN("%s:%d: target `%s' doesn't match the target pattern",
-             LOCF(loc), output.c_str());
+        WARN_LOC(loc, "target `%s' doesn't match the target pattern",
+                 output.c_str());
       }
     }
 
@@ -139,13 +154,13 @@ void ParseRule(Loc& loc, StringPiece line, char term,
   }
 
   if (rule->output_patterns.empty()) {
-    ERROR("%s:%d: *** missing target pattern.", LOCF(loc));
+    ERROR_LOC(loc, "*** missing target pattern.");
   }
   if (rule->output_patterns.size() > 1) {
-    ERROR("%s:%d: *** multiple target patterns.", LOCF(loc));
+    ERROR_LOC(loc, "*** multiple target patterns.");
   }
   if (!IsPatternRule(rule->output_patterns[0].str())) {
-    ERROR("%s:%d: *** target pattern contains no '%%'.", LOCF(loc));
+    ERROR_LOC(loc, "*** target pattern contains no '%%'.");
   }
   ParseInputs(rule, third);
 }

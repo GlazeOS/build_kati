@@ -51,6 +51,7 @@ class Parser {
         state_(ParserState::NOT_AFTER_RULE),
         stmts_(stmts),
         out_stmts_(stmts),
+        num_define_nest_(0),
         num_if_nest_(0),
         loc_(filename, 0),
         fixed_lineno_(false) {
@@ -78,6 +79,8 @@ class Parser {
       if (!fixed_lineno_)
         loc_.lineno++;
       StringPiece line(buf_.data() + l_, e - l_);
+      if (line.get(line.size() - 1) == '\r')
+        line.remove_suffix(1);
       orig_line_with_directives_ = line;
       ParseLine(line);
       if (!fixed_lineno_)
@@ -87,6 +90,12 @@ class Parser {
 
       l_ = e + 1;
     }
+
+    if (!if_stack_.empty())
+      ERROR_LOC(Loc(loc_.filename, loc_.lineno + 1), "*** missing `endif'.");
+    if (!define_name_.empty())
+      ERROR_LOC(Loc(loc_.filename, define_start_line_),
+                "*** missing `endef', unterminated `define'.");
   }
 
   static void Init() {
@@ -273,6 +282,7 @@ class Parser {
       return;
     }
     define_name_ = line;
+    num_define_nest_ = 1;
     define_start_ = 0;
     define_start_line_ = loc_.lineno;
     state_ = ParserState::NOT_AFTER_RULE;
@@ -280,7 +290,12 @@ class Parser {
 
   void ParseInsideDefine(StringPiece line) {
     line = TrimLeftSpace(line);
-    if (GetDirective(line) != "endef") {
+    StringPiece directive = GetDirective(line);
+    if (directive == "define")
+      num_define_nest_++;
+    else if (directive == "endef")
+      num_define_nest_--;
+    if (num_define_nest_ > 0) {
       if (define_start_ == 0)
         define_start_ = l_;
       return;
@@ -289,7 +304,7 @@ class Parser {
     StringPiece rest = TrimRightSpace(RemoveComment(TrimLeftSpace(
         line.substr(sizeof("endef")))));
     if (!rest.empty()) {
-      WARN("%s:%d: extraneous text after `endef' directive", LOCF(loc_));
+      WARN_LOC(loc_, "extraneous text after `endef' directive");
     }
 
     AssignStmt* stmt = new AssignStmt();
@@ -359,7 +374,7 @@ class Parser {
       }
     }
     if (!s.empty()) {
-      WARN("%s:%d: extraneous text after `ifeq' directive", LOCF(loc_));
+      WARN_LOC(loc_, "extraneous text after `ifeq' directive");
       return true;
     }
     return true;
@@ -396,7 +411,7 @@ class Parser {
 
     num_if_nest_ = st->num_nest + 1;
     if (!HandleDirective(next_if, else_if_directives_)) {
-      WARN("%s:%d: extraneous text after `else' directive", LOCF(loc_));
+      WARN_LOC(loc_, "extraneous text after `else' directive");
     }
     num_if_nest_ = 0;
   }
@@ -508,6 +523,7 @@ class Parser {
   vector<Stmt*>* out_stmts_;
 
   StringPiece define_name_;
+  int num_define_nest_;
   size_t define_start_;
   int define_start_line_;
 

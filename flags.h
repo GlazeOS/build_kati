@@ -27,6 +27,7 @@ struct Flags {
   bool detect_android_echo;
   bool detect_depfiles;
   bool dump_kati_stamp;
+  bool enable_debug;
   bool enable_kati_warnings;
   bool enable_stat_logs;
   bool gen_all_targets;
@@ -35,8 +36,10 @@ struct Flags {
   bool is_silent_mode;
   bool is_syntax_check_only;
   bool regen;
+  bool regen_debug;
   bool regen_ignoring_kati_binary;
   bool use_find_emulator;
+  bool color_warnings;
   const char* goma_dir;
   const char* ignore_dirty_pattern;
   const char* no_ignore_dirty_pattern;

@@ -25,6 +25,7 @@
 
 #include "eval.h"
 #include "fileutil.h"
+#include "flags.h"
 #include "log.h"
 #include "rule.h"
 #include "stats.h"
@@ -155,16 +156,18 @@ struct RuleMerger {
     if (rules.empty()) {
       is_double_colon = r->is_double_colon;
     } else if (is_double_colon != r->is_double_colon) {
-      ERROR("%s:%d: *** target file `%s' has both : and :: entries.",
-            LOCF(r->loc), output.c_str());
+      ERROR_LOC(r->loc, "*** target file `%s' has both : and :: entries.",
+                output.c_str());
     }
 
     if (primary_rule && !r->cmds.empty() &&
         !IsSuffixRule(output) && !r->is_double_colon) {
-      WARN("%s:%d: warning: overriding commands for target `%s'",
-           LOCF(r->cmd_loc()), output.c_str());
-      WARN("%s:%d: warning: ignoring old commands for target `%s'",
-           LOCF(primary_rule->cmd_loc()), output.c_str());
+      WARN_LOC(r->cmd_loc(),
+               "warning: overriding commands for target `%s'",
+               output.c_str());
+      WARN_LOC(primary_rule->cmd_loc(),
+               "warning: ignoring old commands for target `%s'",
+               output.c_str());
       primary_rule = r;
     }
     if (!primary_rule && !r->cmds.empty()) {
@@ -214,6 +217,8 @@ struct RuleMerger {
       if (r == primary_rule)
         continue;
       FillDepNodeFromRule(output, r, n);
+      if (n->loc.filename == NULL)
+        n->loc = r->loc;
     }
   }
 };
@@ -228,6 +233,7 @@ DepNode::DepNode(Symbol o, bool p, bool r)
       is_restat(r),
       rule_vars(NULL),
       depfile_var(NULL),
+      ninja_pool_var(NULL),
       output_pattern(Symbol::IsUninitialized()) {
   g_dep_node_pool->push_back(this);
 }
@@ -241,7 +247,8 @@ class DepBuilder {
         rule_vars_(rule_vars),
         implicit_rules_(new RuleTrie()),
         first_rule_(Symbol::IsUninitialized{}),
-        depfile_var_name_(Intern(".KATI_DEPFILE")) {
+        depfile_var_name_(Intern(".KATI_DEPFILE")),
+        ninja_pool_var_name_(Intern(".KATI_NINJA_POOL")) {
     ScopedTimeReporter tr("make dep (populate)");
     PopulateRules(rules);
     // TODO?
@@ -269,8 +276,7 @@ class DepBuilder {
       if (targets.empty()) {
         suffix_rules_.clear();
       } else {
-        WARN("%s:%d: kati doesn't support .SUFFIXES with prerequisites",
-             LOCF(loc));
+        WARN_LOC(loc, "kati doesn't support .SUFFIXES with prerequisites");
       }
     }
 
@@ -287,12 +293,11 @@ class DepBuilder {
       ".EXPORT_ALL_VARIABLES",
       ".NOTPARALLEL",
       ".ONESHELL",
-      ".POSIX",
       NULL
     };
     for (const char** p = kUnsupportedBuiltinTargets; *p; p++) {
       if (GetRuleInputs(Intern(*p), &targets, &loc)) {
-        WARN("%s:%d: kati doesn't support %s", LOCF(loc), *p);
+        WARN_LOC(loc, "kati doesn't support %s", *p);
       }
     }
   }
@@ -532,7 +537,7 @@ class DepBuilder {
     if (found == suffix_rules_.end())
       return rule_merger;
 
-    for (shared_ptr<Rule> irule : found->second) {
+    for (const shared_ptr<Rule> &irule : found->second) {
       CHECK(irule->inputs.size() == 1);
       Symbol input = ReplaceSuffix(output, irule->inputs[0]);
       if (!Exists(input))
@@ -605,6 +610,8 @@ class DepBuilder {
 
         if (name == depfile_var_name_) {
           n->depfile_var = new_var;
+        } else if (name == ninja_pool_var_name_) {
+          n->ninja_pool_var = new_var;
         } else {
           sv.emplace_back(new ScopedVar(cur_rule_vars_.get(), name, new_var));
         }
@@ -649,6 +656,7 @@ class DepBuilder {
   unordered_set<Symbol> phony_;
   unordered_set<Symbol> restat_;
   Symbol depfile_var_name_;
+  Symbol ninja_pool_var_name_;
 };
 
 void MakeDep(Evaluator* ev,

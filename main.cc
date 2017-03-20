@@ -154,9 +154,14 @@ static int Run(const vector<Symbol>& targets,
   }
   ev->set_is_bootstrap(false);
 
+  ev->set_is_commandline(true);
   for (StringPiece l : cl_vars) {
-    SetVar(l, VarOrigin::COMMAND_LINE);
+    vector<Stmt*> asts;
+    Parse(Intern(l).str(), Loc("*bootstrap*", 0), &asts);
+    CHECK(asts.size() == 1);
+    asts[0]->Eval(ev);
   }
+  ev->set_is_commandline(false);
 
   {
     ScopedTimeReporter tr("eval time");
@@ -168,8 +173,8 @@ static int Run(const vector<Symbol>& targets,
   }
 
   for (ParseErrorStmt* err : GetParseErrors()) {
-    WARN("%s:%d: warning for parse error in an unevaluated line: %s",
-         LOCF(err->loc()), err->msg.c_str());
+    WARN_LOC(err->loc(), "warning for parse error in an unevaluated line: %s",
+             err->msg.c_str());
   }
 
   vector<DepNode*> nodes;

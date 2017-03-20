@@ -17,6 +17,8 @@
 #include "strutil.h"
 
 #include <assert.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include <string>
 #include <vector>
@@ -52,6 +54,20 @@ void TestHasSuffix() {
   assert(HasSuffix("bar", "ar"));
   assert(HasSuffix("bar", ""));
   assert(!HasSuffix("bar", "bbar"));
+}
+
+void TestTrimPrefix() {
+  ASSERT_EQ(TrimPrefix("foo", "foo"), "");
+  ASSERT_EQ(TrimPrefix("foo", "fo"), "o");
+  ASSERT_EQ(TrimPrefix("foo", ""), "foo");
+  ASSERT_EQ(TrimPrefix("foo", "fooo"), "foo");
+}
+
+void TestTrimSuffix() {
+  ASSERT_EQ(TrimSuffix("bar", "bar"), "");
+  ASSERT_EQ(TrimSuffix("bar", "ar"), "b");
+  ASSERT_EQ(TrimSuffix("bar", ""), "bar");
+  ASSERT_EQ(TrimSuffix("bar", "bbar"), "bar");
 }
 
 string SubstPattern(StringPiece str, StringPiece pat, StringPiece subst) {
@@ -138,17 +154,65 @@ void TestFindEndOfLine() {
   ASSERT_EQ(FindEndOfLine(StringPiece(buf, 2), 0, &lf_cnt), 2);
 }
 
+// Take a string, and copy it into an allocated buffer where
+// the byte immediately after the null termination character
+// is read protected. Useful for testing, but doesn't support
+// freeing the allocated pages.
+const char* CreateProtectedString(const char* str) {
+  int pagesize = sysconf(_SC_PAGE_SIZE);
+  void *buffer;
+  char *buffer_str;
+
+  // Allocate two pages of memory
+  if (posix_memalign(&buffer, pagesize, pagesize * 2) != 0) {
+    perror("posix_memalign failed");
+    assert(false);
+  }
+
+  // Make the second page unreadable
+  buffer_str = (char*)buffer + pagesize;
+  if (mprotect(buffer_str, pagesize, PROT_NONE) != 0) {
+    perror("mprotect failed");
+    assert(false);
+  }
+
+  // Then move the test string into the very end of the first page
+  buffer_str -= strlen(str) + 1;
+  strcpy(buffer_str, str);
+
+  return buffer_str;
+}
+
+void TestWordScannerInvalidAccess() {
+  vector<StringPiece> ss;
+  for (StringPiece tok : WordScanner(CreateProtectedString("0123 456789"))) {
+    ss.push_back(tok);
+  }
+  assert(ss.size() == 2LU);
+  ASSERT_EQ(ss[0], "0123");
+  ASSERT_EQ(ss[1], "456789");
+}
+
+void TestFindEndOfLineInvalidAccess() {
+  size_t lf_cnt = 0;
+  ASSERT_EQ(FindEndOfLine(CreateProtectedString("a\\"), 0, &lf_cnt), 2);
+}
+
 }  // namespace
 
 int main() {
   TestWordScanner();
   TestHasPrefix();
   TestHasSuffix();
+  TestTrimPrefix();
+  TestTrimSuffix();
   TestSubstPattern();
   TestNoLineBreak();
   TestHasWord();
   TestNormalizePath();
   TestEscapeShell();
   TestFindEndOfLine();
+  TestWordScannerInvalidAccess();
+  TestFindEndOfLineInvalidAccess();
   assert(!g_failed);
 }
